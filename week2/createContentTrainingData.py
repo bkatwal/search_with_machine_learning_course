@@ -61,9 +61,19 @@ def _label_filename(filename):
 if __name__ == '__main__':
     files = glob.glob(f'{directory}/*.xml')
     print("Writing results to %s" % output_file)
+    label_freq = {}
+    labels_arr = []
     with multiprocessing.Pool() as p:
         all_labels = tqdm(p.imap(_label_filename, files), total=len(files))
-        with open(output_file, 'w') as output:
-            for label_list in all_labels:
-                for (cat, name) in label_list:
-                    output.write(f'__label__{cat} {name}\n')
+        for label_list in all_labels:
+            for (cat, name) in label_list:
+                if cat not in label_freq:
+                    label_freq[cat] = 1
+                freq = label_freq[cat]
+                label_freq[cat] = freq + 1
+                labels_arr.append((cat, name))
+
+    with open(output_file, 'w') as output:
+        for (cat, name) in labels_arr:
+            if label_freq[cat] >= min_products:
+                output.write(f'__label__{cat} {name}\n')
