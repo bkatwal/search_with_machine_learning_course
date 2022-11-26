@@ -12,11 +12,53 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
+import fasttext
+import nltk
+
+import re
+stemmer = nltk.stem.PorterStemmer()
+
+model = fasttext.load_model("/workspace/search_with_machine_learning_course/category_classifier.bin")
+category_threshold = 0.4
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
 
+
+def normalize_query(query):
+    # convert to lower case
+    query = query.lower()
+
+    # replace number with space
+    query = re.sub(r'[^a-z0-9]', ' ', query)
+
+    # remove one or more space with one space
+    query = re.sub(r'\s+', ' ', query)
+
+    # split each word by space -> get stem of word -> join by space
+    query = ' '.join([stemmer.stem(part) for part in query.split(' ')])
+    return query
+
+
+def predict_categories(query):
+    candidate_count = 2
+    normalized_query = normalize_query(query)
+    categories, probs = model.predict(normalized_query, k=candidate_count)
+
+    print(categories)
+    print(probs)
+
+    cat_len = len(categories)
+    category_list = []
+
+    for i in range(0, cat_len):
+        if probs[i] > category_threshold:
+            curr_cat = categories[i].replace("__label__", "")
+            category_list.append(curr_cat)
+        else:
+            break
+    return category_list
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -50,8 +92,9 @@ def create_prior_queries(doc_ids, doc_id_weights,
 
 
 # Hardcoded query here.  Better to use search templates or other query config.
-def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None,
+def create_query(user_query, click_prior_query, filters, boosters, sort="_score", sortDir="desc", size=10, source=None,
                  match_on="name"):
+
     query_obj = {
         'size': size,
         "sort": [
@@ -169,6 +212,11 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
             }
         }
     }
+
+    if boosters:
+        query_obj["query"]["function_score"]["query"]["bool"]["should"].extend(boosters)
+
+
     if click_prior_query is not None and click_prior_query != "":
         query_obj["query"]["function_score"]["query"]["bool"]["should"].append({
             "query_string": {
@@ -188,13 +236,33 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     return query_obj
 
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonym=False):
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonym=False, use_filter=True, use_booster=False):
     #### W3: classify the query
     #### W3: create filters and boosts
     # Note: you may also want to modify the `create_query` method above
     match_on = "name.synonyms" if synonym else "name"
-    print(f"match_ONNN {match_on}")
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir,
+
+    predicted_categories = predict_categories(user_query)
+    cat_filters = []
+    boost_queries = []
+    if len(predicted_categories) > 0:
+        if use_filter:
+            cat_filter = {
+                "terms": {
+                    "categoryPathIds.keyword": predicted_categories
+                }
+            }
+            cat_filters.append(cat_filter)
+        elif use_booster:
+            cat_boost = {
+                "terms": {
+                    "categoryPathIds.keyword": predicted_categories,
+                    "boost": 50
+                }
+            }
+            boost_queries.append(cat_boost)
+
+    query_obj = create_query(user_query, click_prior_query=None, filters=cat_filters, boosters=boost_queries, sort=sort, sortDir=sortDir,
                              source=["name", "shortDescription"], match_on=match_on)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
@@ -256,5 +324,3 @@ if __name__ == "__main__":
         search(client=opensearch, user_query=query, index=index_name, synonym=synonym)
 
         print(query_prompt)
-
-    
