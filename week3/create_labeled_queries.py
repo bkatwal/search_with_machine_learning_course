@@ -46,17 +46,16 @@ if args.min_queries:
     min_queries = int(args.min_queries)
 
 
-def roll_up_categories(q_df, p_df):
+def roll_up_categories(q_df, parent_cat_dict: dict):
     category_query_count_df = q_df.groupby(['category']).size().reset_index(name='count')
     unqualified_cat_df = category_query_count_df.query('count < @min_queries')
     unqualified_cat_set = set(unqualified_cat_df['category'].values)
     if len(unqualified_cat_df) == 0:
         return q_df
 
-    parent_cat_dict = dict(zip(p_df.category, p_df.parent))
     q_df['category'] = q_df['category'].apply(
         lambda cat: parent_cat_dict[cat] if cat in unqualified_cat_set and cat in parent_cat_dict else cat)
-    return roll_up_categories(q_df, p_df)
+    return roll_up_categories(q_df, parent_cat_dict)
 
 
 # The root category, named Best Buy with id cat00000, doesn't have a parent.
@@ -87,7 +86,8 @@ queries_df['query'] = queries_df['query'].apply(lambda query: normalize_query(qu
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
 print("roll up start")
-roll_up_categories(queries_df, parents_df)
+parent_cat_dict = dict(zip(parents_df.category, parents_df.parent))
+roll_up_categories(queries_df, parent_cat_dict)
 
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
